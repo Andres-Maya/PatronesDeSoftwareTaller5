@@ -44,7 +44,7 @@ public class LegacyProAquaSensor {
     }
 
     public boolean selfTest() {
-        return powered && RANDOM.nextDouble() > 0.05; // 95% success rate
+        return powered && RANDOM.nextDouble() > 0.005; // 99.5% success rate
     }
 
     public String getDeviceId()   { return "PROAQUA-2000-REV3"; }

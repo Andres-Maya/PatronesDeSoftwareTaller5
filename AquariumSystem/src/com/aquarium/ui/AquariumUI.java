@@ -183,11 +183,12 @@ public class AquariumUI extends JFrame {
         bar.setBackground(BG_PANEL);
         bar.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, ACCENT_TEAL));
 
-        bar.add(makeButton("➕ Agregar Animal",  ACCENT_TEAL,  e -> showAddAnimalDialog()));
-        bar.add(makeButton("🗑 Eliminar",         ALERT_RED,    e -> deleteSelectedAnimal()));
-        bar.add(makeButton("🍽 Alimentar",         OK_GREEN,     e -> feedSelectedAnimal()));
-        bar.add(makeButton("🍽🍽 Alimentar Todos", ACCENT_CYAN,  e -> feedAllHungry()));
-        bar.add(makeButton("⏩ +3 Horas",          ALERT_ORANGE, e -> { service.advanceTime(3); refreshAll(); }));
+        bar.add(makeButton("📡 Tomar Medición",    ACCENT_TEAL,  e -> takeMeasurement()));
+        bar.add(makeButton("➕ Agregar Animal",    ACCENT_CYAN,  e -> showAddAnimalDialog()));
+        bar.add(makeButton("🗑 Eliminar",           ALERT_RED,    e -> deleteSelectedAnimal()));
+        bar.add(makeButton("🍽 Alimentar",           OK_GREEN,     e -> feedSelectedAnimal()));
+        bar.add(makeButton("🍽🍽 Alimentar Todos",   OK_GREEN,     e -> feedAllHungry()));
+        bar.add(makeButton("⏩ +3 Horas",            ALERT_ORANGE, e -> { service.advanceTime(3); refreshAll(); }));
         return bar;
     }
 
@@ -254,12 +255,20 @@ public class AquariumUI extends JFrame {
 
         p.add(gauges, BorderLayout.CENTER);
 
+        // South area: measurement button + sensor name stacked vertically
+        JPanel southArea = new JPanel(new BorderLayout(0, 2));
+        southArea.setBackground(BG_CARD);
+        southArea.setBorder(new EmptyBorder(4, 10, 6, 10));
+
         JButton measureBtn = makeButton("📡 Tomar Medición", ACCENT_TEAL, e -> takeMeasurement());
-        JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        JPanel btnRow = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
         btnRow.setBackground(BG_CARD);
         btnRow.add(measureBtn);
-        p.add(btnRow, BorderLayout.SOUTH);
-        p.add(sensorNameLabel, BorderLayout.PAGE_END);
+
+        southArea.add(btnRow,          BorderLayout.CENTER);
+        southArea.add(sensorNameLabel, BorderLayout.SOUTH);
+
+        p.add(southArea, BorderLayout.SOUTH);
 
         return p;
     }
@@ -378,15 +387,22 @@ public class AquariumUI extends JFrame {
     private void takeMeasurement() {
         WaterParameters params = service.takeMeasurement();
         if (params == null) {
-            log("❌ Falla al leer el sensor.");
-            alertTextLabel.setForeground(ALERT_RED);
-            alertTextLabel.setText("ERROR SENSOR");
+            // Keep last known readings visible; just show alert in log and header
+            String sensorName = service.getActiveSensor().getSensorName();
+            log("⚠ Falla transitoria en [" + sensorName + "]. Reintentando en el siguiente ciclo...");
+            alertTextLabel.setForeground(ALERT_ORANGE);
+            alertTextLabel.setText("⚠ SENSOR — Ultimo valor conocido mostrado");
+            // If we have a previous measurement, keep gauges as-is (do not clear them)
+            WaterParameters last = service.getLastMeasurement();
+            if (last == null) {
+                alertTextLabel.setText("⚠ Sin datos de sensor aun");
+            }
             return;
         }
         updateWaterGauges(params);
         updateAnimalTable();
         updateAlerts();
-        log("📡 Medición tomada: " + params);
+        log("📡 Medicion tomada [" + service.getActiveSensor().getSensorName() + "]: " + params);
     }
 
     private void feedSelectedAnimal() {
