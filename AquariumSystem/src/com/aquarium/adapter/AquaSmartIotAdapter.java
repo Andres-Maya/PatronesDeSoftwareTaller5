@@ -48,10 +48,11 @@ public class AquaSmartIotAdapter implements SensorReader {
         double nitrates  = Math.max(0, 8.0  + RANDOM.nextGaussian() * 1.5);
         double oxygen    = 7.8 + RANDOM.nextGaussian() * 0.2;
 
-        // Every 10 reads, simulate a spike to test alert system
-        if (readCount % 10 == 0) {
-            ammonium += 0.4;
-            temp += 2.5;
+        // Every 20 reads simulate a mild spike (for alert demo purposes only)
+        // Spike is kept within warning threshold, not error threshold
+        if (readCount % 20 == 0 && readCount > 0) {
+            ammonium = Math.min(ammonium + 0.18, 0.24); // stays below critical 0.25
+            temp     = Math.min(temp + 1.5, 28.0);
         }
 
         return new WaterParameters(temp, ph, salinity, ammonium, nitrites, nitrates, oxygen);

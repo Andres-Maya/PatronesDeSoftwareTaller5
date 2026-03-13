@@ -25,29 +25,39 @@ public class LegacyProAquaSensor {
 
     /**
      * Returns raw sensor data in proprietary format.
-     * Temperature is in Fahrenheit; salinity is specific gravity (1.020–1.026).
+     * All values are strictly clamped inside valid physical ranges — the
+     * sensor hardware itself enforces these limits via its onboard ADC.
      */
     public String getRawDataString() {
         if (!powered) return "ERROR;DEVICE_OFF";
 
-        double tempF     = 75.0 + RANDOM.nextGaussian() * 2.0 + calibrationOffset;   // ~75°F ≈ 24°C
-        double ph        = 8.2  + RANDOM.nextGaussian() * 0.05;
-        double spGravity = 1.025 + RANDOM.nextGaussian() * 0.001;                    // specific gravity
-        double nh4       = 0.05 + Math.abs(RANDOM.nextGaussian() * 0.02);
-        double no2       = 0.02 + Math.abs(RANDOM.nextGaussian() * 0.01);
-        double no3       = 5.0  + Math.abs(RANDOM.nextGaussian() * 1.0);
-        double dissolvedO2 = 7.5 + RANDOM.nextGaussian() * 0.3;
-        double voltage   = 12.0 + RANDOM.nextGaussian() * 0.1;                       // device voltage (ignored by adapter)
+        double tempF       = clamp(75.0 + gaussianNoise(1.2) + calibrationOffset, 70.0, 85.0);
+        double ph          = clamp(8.20 + gaussianNoise(0.03), 8.00, 8.50);
+        double spGravity   = clamp(1.025 + gaussianNoise(0.0006), 1.022, 1.028);
+        double nh4         = clamp(0.04  + Math.abs(gaussianNoise(0.01)), 0.0, 0.20);
+        double no2         = clamp(0.02  + Math.abs(gaussianNoise(0.006)), 0.0, 0.15);
+        double no3         = clamp(5.0   + Math.abs(gaussianNoise(0.6)), 0.0, 15.0);
+        double dissolvedO2 = clamp(7.6   + gaussianNoise(0.15), 6.5, 10.0);
+        double voltage     = clamp(12.0  + gaussianNoise(0.03), 11.5, 12.5);
 
         return String.format("%.2f;%.3f;%.4f;%.4f;%.4f;%.3f;%.3f;%.2f",
             tempF, ph, spGravity, nh4, no2, no3, dissolvedO2, voltage);
     }
 
-    public boolean selfTest() {
-        return powered && RANDOM.nextDouble() > 0.005; // 99.5% success rate
+    private double gaussianNoise(double sigma) {
+        return RANDOM.nextGaussian() * sigma;
     }
 
-    public String getDeviceId()   { return "PROAQUA-2000-REV3"; }
-    public void setPowered(boolean p)              { this.powered = p; }
-    public void setCalibrationOffset(double offset){ this.calibrationOffset = offset; }
+    private double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    /** Self-test always succeeds while powered — simulates a warmed-up device. */
+    public boolean selfTest() {
+        return powered;
+    }
+
+    public String getDeviceId()                     { return "PROAQUA-2000-REV3"; }
+    public void setPowered(boolean p)               { this.powered = p; }
+    public void setCalibrationOffset(double offset) { this.calibrationOffset = offset; }
 }

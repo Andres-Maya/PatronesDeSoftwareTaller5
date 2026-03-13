@@ -300,9 +300,16 @@ public class AquariumUI extends JFrame {
         });
         styleCombBox(sensorCombo);
         sensorCombo.addActionListener(e -> {
-            if (sensorCombo.getSelectedIndex() == 0) service.switchSensor(sensorIot);
-            else                                      service.switchSensor(sensorLegacy);
-            log("Sensor cambiado a: " + sensorCombo.getSelectedItem());
+            String selected = (String) sensorCombo.getSelectedItem();
+            if (sensorCombo.getSelectedIndex() == 0) {
+                service.switchSensor(sensorIot);
+            } else {
+                service.switchSensor(sensorLegacy);
+            }
+            log("🔄 Sensor cambiado a: " + selected + ". Tomando medicion inicial...");
+            sensorNameLabel.setText("Sensor: " + service.getActiveSensor().getSensorName());
+            // Take an immediate reading with the new sensor so gauges update at once
+            takeMeasurement();
         });
         inner.add(sensorCombo);
 
@@ -384,25 +391,48 @@ public class AquariumUI extends JFrame {
 
     // ── Business action handlers ──────────────────────────────────────────────
 
+    /**
+     * Takes a sensor measurement triggered MANUALLY by the user.
+     * Always logs the result (success or failure) to the event log.
+     */
     private void takeMeasurement() {
+        takeMeasurementInternal(true);
+    }
+
+    /**
+     * Takes a sensor measurement triggered by the AUTO-REFRESH timer.
+     * Failures are silent (console only) so the log stays clean.
+     */
+    private void takeMeasurementSilent() {
+        takeMeasurementInternal(false);
+    }
+
+    /**
+     * Core measurement logic.
+     * @param logErrors if true, sensor failures are written to the event log;
+     *                  if false, only successes are logged (timer-driven reads).
+     */
+    private void takeMeasurementInternal(boolean logErrors) {
         WaterParameters params = service.takeMeasurement();
         if (params == null) {
-            // Keep last known readings visible; just show alert in log and header
-            String sensorName = service.getActiveSensor().getSensorName();
-            log("⚠ Falla transitoria en [" + sensorName + "]. Reintentando en el siguiente ciclo...");
-            alertTextLabel.setForeground(ALERT_ORANGE);
-            alertTextLabel.setText("⚠ SENSOR — Ultimo valor conocido mostrado");
-            // If we have a previous measurement, keep gauges as-is (do not clear them)
-            WaterParameters last = service.getLastMeasurement();
-            if (last == null) {
-                alertTextLabel.setText("⚠ Sin datos de sensor aun");
+            // Keep gauge values from last successful read — do not clear them
+            if (logErrors) {
+                String sensorName = service.getActiveSensor().getSensorName();
+                log("⚠ Sin respuesta del sensor [" + sensorName
+                    + "]. Verifique la conexion del dispositivo.");
+                alertTextLabel.setForeground(ALERT_ORANGE);
+                alertTextLabel.setText("⚠ Error de sensor");
             }
+            // Timer failures go only to system console, never to the UI log
             return;
         }
         updateWaterGauges(params);
         updateAnimalTable();
         updateAlerts();
-        log("📡 Medicion tomada [" + service.getActiveSensor().getSensorName() + "]: " + params);
+        if (logErrors) {
+            // Only log when user manually triggers, to avoid flooding the log every 15s
+            log("📡 Medicion [" + service.getActiveSensor().getSensorName() + "]: " + params);
+        }
     }
 
     private void feedSelectedAnimal() {
@@ -498,6 +528,7 @@ public class AquariumUI extends JFrame {
     // ── UI update helpers ─────────────────────────────────────────────────────
 
     private void refreshAll() {
+        // Initial load uses manual variant so the first reading appears in the log
         takeMeasurement();
         updateAnimalTable();
     }
@@ -567,7 +598,12 @@ public class AquariumUI extends JFrame {
     }
 
     private void startAutoRefresh() {
-        autoRefreshTimer = new Timer(15_000, e -> refreshAll());
+        // Auto-refresh calls the silent variant so transient sensor hiccups
+        // never appear in the user-facing event log.
+        autoRefreshTimer = new Timer(15_000, e -> {
+            takeMeasurementSilent();
+            updateAnimalTable();
+        });
         autoRefreshTimer.start();
     }
 

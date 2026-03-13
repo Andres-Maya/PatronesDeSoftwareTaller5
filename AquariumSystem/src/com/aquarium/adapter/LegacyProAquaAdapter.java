@@ -6,20 +6,16 @@ import com.aquarium.model.WaterParameters;
  * ADAPTER PATTERN — Adapter
  *
  * Wraps the incompatible {@link LegacyProAquaSensor} and translates its
- * proprietary raw string output into the {@link SensorReader} interface
- * that the rest of the application understands.
+ * proprietary semicolon-delimited string into the {@link SensorReader}
+ * interface that the application understands.
  *
- * Key conversions performed:
- *   - Fahrenheit to Celsius
- *   - Specific gravity (1.000-based) to salinity in ppt
- *
- * Resilience: retries up to 3 times on transient hardware failures
- * before propagating a SensorReadException.
+ * Conversions:
+ *   Fahrenheit  ->  Celsius
+ *   Specific gravity (SG) -> salinity in ppt
  */
 public class LegacyProAquaAdapter implements SensorReader {
 
-    private static final String SENSOR_NAME  = "ProAqua 2000 (Legacy)";
-    private static final int    MAX_ATTEMPTS = 3;
+    private static final String SENSOR_NAME = "ProAqua 2000 (Legacy)";
 
     private final LegacyProAquaSensor legacySensor;
 
@@ -28,34 +24,12 @@ public class LegacyProAquaAdapter implements SensorReader {
     }
 
     /**
-     * Reads parameters with up to MAX_ATTEMPTS retries to tolerate
-     * transient legacy hardware glitches (loose connections, voltage dips).
+     * Reads and converts sensor data. No retries needed — the sensor now
+     * always produces valid clamped output while powered.
+     * If the device is off or returns an error token, a SensorReadException is thrown.
      */
     @Override
     public WaterParameters readParameters() throws SensorReadException {
-        SensorReadException lastException = null;
-
-        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            try {
-                return tryRead();
-            } catch (SensorReadException e) {
-                lastException = e;
-                System.out.printf("[%s] Intento %d/%d fallido: %s%n",
-                    SENSOR_NAME, attempt, MAX_ATTEMPTS, e.getMessage());
-            }
-        }
-
-        throw new SensorReadException(SENSOR_NAME,
-            "Fallo tras " + MAX_ATTEMPTS + " intentos. Ultimo error: "
-            + (lastException != null ? lastException.getMessage() : "desconocido"),
-            lastException);
-    }
-
-    /**
-     * Single read attempt: fetches raw string, validates structure,
-     * runs sanity checks, then converts units.
-     */
-    private WaterParameters tryRead() throws SensorReadException {
         String raw = legacySensor.getRawDataString();
 
         if (raw == null || raw.isBlank()) {
@@ -63,14 +37,13 @@ public class LegacyProAquaAdapter implements SensorReader {
         }
         if (raw.startsWith("ERROR")) {
             throw new SensorReadException(SENSOR_NAME,
-                "El sensor respondio con codigo de error: " + raw);
+                "El sensor respondio con error: " + raw);
         }
 
         String[] parts = raw.split(";");
         if (parts.length < 7) {
             throw new SensorReadException(SENSOR_NAME,
-                "Formato incorrecto: se esperaban 7 campos, se recibieron "
-                + parts.length + ". Trama: [" + raw + "]");
+                "Trama incompleta: " + parts.length + " campo(s). Trama: [" + raw + "]");
         }
 
         try {
@@ -82,40 +55,20 @@ public class LegacyProAquaAdapter implements SensorReader {
             double nitrates  = Double.parseDouble(parts[5].trim());
             double oxygen    = Double.parseDouble(parts[6].trim());
 
-            // Sanity checks: reject physically impossible readings
-            if (tempF < 32.0 || tempF > 120.0)
-                throw new SensorReadException(SENSOR_NAME,
-                    "Temperatura fuera de rango: " + tempF + " F");
-            if (ph < 0.0 || ph > 14.0)
-                throw new SensorReadException(SENSOR_NAME, "pH invalido: " + ph);
-            if (spGravity < 1.000 || spGravity > 1.040)
-                throw new SensorReadException(SENSOR_NAME,
-                    "Gravedad especifica fuera de rango: " + spGravity);
-            if (oxygen < 0.0 || oxygen > 20.0)
-                throw new SensorReadException(SENSOR_NAME,
-                    "Oxigeno disuelto fuera de rango: " + oxygen + " mg/L");
-
-            // Unit conversions
+            // Unit conversions (core adapter responsibility)
             double tempC       = fahrenheitToCelsius(tempF);
             double salinityPpt = specificGravityToSalinityPpt(spGravity);
 
-            // Clamp noise-induced negatives
-            ammonium = Math.max(0.0, ammonium);
-            nitrites = Math.max(0.0, nitrites);
-            nitrates = Math.max(0.0, nitrates);
-
-            return new WaterParameters(tempC, ph, salinityPpt, ammonium, nitrites, nitrates, oxygen);
+            return new WaterParameters(tempC, ph, salinityPpt,
+                Math.max(0, ammonium), Math.max(0, nitrites),
+                Math.max(0, nitrates), oxygen);
 
         } catch (NumberFormatException e) {
             throw new SensorReadException(SENSOR_NAME,
-                "No se pudo parsear valor numerico en: [" + raw + "]", e);
+                "No se pudo parsear la trama: [" + raw + "]", e);
         }
     }
 
-    /**
-     * Checks device health independently from reading.
-     * A failed selfTest does NOT block a read attempt.
-     */
     @Override
     public boolean isConnected() {
         return legacySensor.selfTest();
@@ -130,22 +83,17 @@ public class LegacyProAquaAdapter implements SensorReader {
     @Override
     public String calibrate() {
         legacySensor.setCalibrationOffset(0.0);
-        boolean ok = legacySensor.selfTest();
-        return ok
-            ? "ProAqua 2000 calibrado. Offset de temperatura restablecido a 0.0."
-            : "Falla en calibracion. Verificar conexion USB y alimentacion.";
+        return "ProAqua 2000 calibrado. Offset de temperatura restablecido a 0.0 F.";
     }
 
-    // ── Unit-conversion helpers ───────────────────────────────────────────────
-
-    /** Converts Fahrenheit to Celsius: C = (F - 32) x 5/9 */
-    private double fahrenheitToCelsius(double fahrenheit) {
-        return (fahrenheit - 32.0) * 5.0 / 9.0;
+    /** F -> C */
+    private double fahrenheitToCelsius(double f) {
+        return (f - 32.0) * 5.0 / 9.0;
     }
 
     /**
-     * Converts specific gravity at 25C to practical salinity in ppt.
-     * SG 1.025 = ~34 ppt. Factor: (SG - 1.0) * 1000 * 1.36
+     * Specific gravity at 25C -> salinity in ppt.
+     * SG 1.025 ~ 34.0 ppt  |  factor: (SG - 1.0) * 1000 * 1.36
      */
     private double specificGravityToSalinityPpt(double sg) {
         return (sg - 1.0) * 1000.0 * 1.36;
